@@ -1,8 +1,29 @@
 use anyhow::{Ok, Result, bail};
 use clap::ValueEnum;
 use regex::Regex;
-
 use std::sync::LazyLock;
+
+static HEX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3}|[A-Fa-f0-9]{4}|[A-Fa-f0-9]{8})$").unwrap()
+});
+
+static RGB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^rgb\s*\(\s*([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)\s*\)\s*$").unwrap()
+});
+
+static RGBA_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^rgba\s*\(\s*([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)\s*\)\s*$")
+        .unwrap()
+});
+
+static OKLAB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^oklab\s*\(\s*([.\d]+%?)[, ]+([.\d]+%?)[, ]+([.\d]+%?)\s*(?:[/,]\s*([.\d]+%?)\s*)?\)\s*$").unwrap()
+});
+
+static OKLCH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^oklch\s*\(\s*([.\d]+%?)[, ]+([.\d]+%?)[, ]+([.\d]+(?:deg)?%?)\s*(?:[/,]\s*([.\d]+%?)\s*)?\)\s*$").unwrap()
+});
+
 #[derive(Debug, PartialEq, Eq, Clone, ValueEnum)]
 pub enum Color {
     Hex,
@@ -36,26 +57,20 @@ struct Oklch {
     alpha: f64,
 }
 
-static HEX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3}|[A-Fa-f0-9]{4}|[A-Fa-f0-9]{8})$").unwrap()
-});
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Xyz {
+    x: f64,
+    y: f64,
+    z: f64,
+}
 
-static RGB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^rgb\s*\(\s*([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)\s*\)\s*$").unwrap()
-});
+trait ToXyz {
+    fn to_xyz(&self) -> Xyz;
+}
 
-static RGBA_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^rgba\s*\(\s*([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)\s*\)\s*$")
-        .unwrap()
-});
-
-static OKLAB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^oklab\s*\(\s*([.\d]+%?)[, ]+([.\d]+%?)[, ]+([.\d]+%?)\s*(?:[/,]\s*([.\d]+%?)\s*)?\)\s*$").unwrap()
-});
-
-static OKLCH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^oklch\s*\(\s*([.\d]+%?)[, ]+([.\d]+%?)[, ]+([.\d]+(?:deg)?%?)\s*(?:[/,]\s*([.\d]+%?)\s*)?\)\s*$").unwrap()
-});
+trait FromXyz {
+    fn from_xyz(xyz: &Xyz, alpha: f64) -> Self;
+}
 
 fn identify_color(color: &str) -> Result<Color> {
     if HEX_REGEX.is_match(color) {
@@ -174,6 +189,129 @@ fn parse_unit_aware<T>(s: &str, max: f64, convert: impl Fn(f64) -> T) -> Result<
     };
 
     Ok(convert(value))
+}
+
+fn srgb_to_linear(v: f64) -> f64 {
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(v: f64) -> f64 {
+    if v <= 0.0031308 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+impl ToXyz for Rgba {
+    fn to_xyz(&self) -> Xyz {
+        let r = srgb_to_linear(self.r as f64 / 255.0);
+        let g = srgb_to_linear(self.g as f64 / 255.0);
+        let b = srgb_to_linear(self.b as f64 / 255.0);
+
+        let x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b;
+        let y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b;
+        let z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b;
+
+        Xyz { x, y, z }
+    }
+}
+
+impl FromXyz for Rgba {
+    fn from_xyz(xyz: &Xyz, alpha: f64) -> Self {
+        let r = 3.2404542 * xyz.x - 1.5371385 * xyz.y - 0.4985314 * xyz.z;
+        let g = -0.9692660 * xyz.x + 1.8760108 * xyz.y + 0.0415560 * xyz.z;
+        let b = 0.0556434 * xyz.x - 0.2040259 * xyz.y + 1.0572252 * xyz.z;
+
+        let scale = |v: f64| -> u8 { (linear_to_srgb(v) * 255.0).round().clamp(0.0, 255.0) as u8 };
+
+        Rgba {
+            r: scale(r),
+            g: scale(g),
+            b: scale(b),
+            alpha,
+        }
+    }
+}
+
+impl ToXyz for Oklab {
+    fn to_xyz(&self) -> Xyz {
+        let l = self.l + 0.3963377774 * self.a + 0.2158037573 * self.b;
+        let m = self.l - 0.1055613458 * self.a - 0.0638541728 * self.b;
+        let s = self.l - 0.0894841775 * self.a - 1.2914855480 * self.b;
+
+        let l_ = l.powi(3);
+        let m_ = m.powi(3);
+        let s_ = s.powi(3);
+
+        Xyz {
+            x: 1.2270138511 * l_ - 0.5577999807 * m_ + 0.2812561490 * s_,
+            y: -0.0405801784 * l_ + 1.1122568696 * m_ - 0.0716766787 * s_,
+            z: -0.0763812845 * l_ - 0.4214819784 * m_ + 1.5861632204 * s_,
+        }
+    }
+}
+
+impl FromXyz for Oklab {
+    fn from_xyz(xyz: &Xyz, alpha: f64) -> Self {
+        let l = 0.8190224432 * xyz.x + 0.3619062563 * xyz.y - 0.1288737826 * xyz.z;
+        let m = 0.0329836672 * xyz.x + 0.9292868469 * xyz.y + 0.0361446682 * xyz.z;
+        let s = 0.0481771996 * xyz.x + 0.2642395249 * xyz.y + 0.6335478258 * xyz.z;
+
+        let l_ = l.cbrt();
+        let m_ = m.cbrt();
+        let s_ = s.cbrt();
+
+        Oklab {
+            l: 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+            a: 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+            b: 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+            alpha,
+        }
+    }
+}
+
+impl Oklch {
+    fn to_oklab(&self) -> Oklab {
+        Oklab {
+            l: self.l,
+            a: self.c * self.h.to_radians().cos(),
+            b: self.c * self.h.to_radians().sin(),
+            alpha: self.alpha,
+        }
+    }
+}
+
+impl ToXyz for Oklch {
+    fn to_xyz(&self) -> Xyz {
+        self.to_oklab().to_xyz()
+    }
+}
+
+impl Oklab {
+    fn to_oklch(&self) -> Oklch {
+        let c = (self.a * self.a + self.b * self.b).sqrt();
+        let mut h = self.b.atan2(self.a).to_degrees();
+        if h < 0.0 {
+            h += 360.0;
+        }
+        Oklch {
+            l: self.l,
+            c,
+            h,
+            alpha: self.alpha,
+        }
+    }
+}
+
+impl FromXyz for Oklch {
+    fn from_xyz(xyz: &Xyz, alpha: f64) -> Self {
+        Oklab::from_xyz(xyz, alpha).to_oklch()
+    }
 }
 
 #[cfg(test)]
