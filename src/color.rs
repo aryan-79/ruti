@@ -1,28 +1,29 @@
 use anyhow::{Result, bail};
 use clap::ValueEnum;
 use regex::Regex;
-use std::io::Write;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::{fmt::Display, sync::LazyLock};
 
 static HEX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3}|[A-Fa-f0-9]{4}|[A-Fa-f0-9]{8})$").unwrap()
+    Regex::new(r"(?i)#([A-Fa-f0-9]{8}|[A-Fa-f0-9]{6}|[A-Fa-f0-9]{4}|[A-Fa-f0-9]{3})\b").unwrap()
 });
 
 static RGB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^rgb\s*\(\s*([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)\s*\)\s*$").unwrap()
+    Regex::new(r"(?i)rgb\s*\(\s*([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)\s*\)").unwrap()
 });
 
 static RGBA_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^rgba\s*\(\s*([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+%?)\s*\)\s*$")
-        .unwrap()
+    Regex::new(r"(?i)rgba\s*\(\s*([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+%?)\s*\)").unwrap()
 });
 
 static OKLAB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^oklab\s*\(\s*(-?[.\d]+%?)[, ]+(-?[.\d]+%?)[, ]+(-?[.\d]+%?)\s*(?:[/, ]\s*([.\d]+%?)\s*)?\)\s*$").unwrap()
+    Regex::new(r"(?i)oklab\s*\(\s*(-?[.\d]+%?)[, ]+(-?[.\d]+%?)[, ]+(-?[.\d]+%?)\s*(?:[/, ]\s*([.\d]+%?)\s*)?\)").unwrap()
 });
 
 static OKLCH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^oklch\s*\(\s*([.\d]+%?)[, ]+([.\d]+%?)[, ]+(-?[.\d]+(?:deg)?%?)\s*(?:[/, ]\s*([.\d]+%?)\s*)?\)\s*$").unwrap()
+    Regex::new(r"(?i)oklch\s*\(\s*([.\d]+%?)[, ]+([.\d]+%?)[, ]+(-?[.\d]+(?:deg)?%?)\s*(?:[/, ]\s*([.\d]+%?)\s*)?\)").unwrap()
 });
 
 #[derive(Debug, PartialEq, Eq, Clone, ValueEnum)]
@@ -440,8 +441,76 @@ pub fn log_conversion_results(
     }
 }
 
+/// returns a tuple with original and replaced file content i.e (original, replaced)
+fn replace_colors(pattern: &str, original: &str, output: Color) -> Result<String> {
+    let mut content = original.to_owned();
+
+    let matches: Vec<String> = match pattern {
+        "hex" => HEX_REGEX
+            .find_iter(&content)
+            .map(|s| s.as_str().to_string())
+            .collect(),
+        "rgb" => RGB_REGEX
+            .find_iter(&content)
+            .map(|s| s.as_str().to_string())
+            .collect(),
+        "rgba" => RGBA_REGEX
+            .find_iter(&content)
+            .map(|s| s.as_str().to_string())
+            .collect(),
+        "oklab" => OKLAB_REGEX
+            .find_iter(&content)
+            .map(|s| s.as_str().to_string())
+            .collect(),
+        "oklch" => OKLCH_REGEX
+            .find_iter(&content)
+            .map(|s| s.as_str().to_string())
+            .collect(),
+        _ => Regex::new(&regex::escape(pattern))?
+            .find_iter(&content)
+            .map(|s| s.as_str().to_string())
+            .collect(),
+    };
+
+    let results = convert_colors(&matches, &output);
+
+    for r in results {
+        match r {
+            Ok((original, converted)) => {
+                content = content.replace(&original, &converted);
+            }
+            Err(_) => {}
+        }
+    }
+
+    Ok(content)
+}
+
+pub fn replace_in_file(path: PathBuf, pattern: &str, output: Color, dry_run: bool) -> Result<()> {
+    let mut file = File::open(&path)?;
+    let mut content = String::new();
+
+    file.read_to_string(&mut content)?;
+
+    let replaced = replace_colors(pattern, &content, output)?;
+
+    if dry_run {
+        println!("{}", replaced);
+    } else {
+        let mut file = File::create(&path)?;
+        file.write_all(replaced.as_bytes())?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use assert_fs::{
+        assert::PathAssert,
+        fixture::{FileWriteStr, PathChild},
+    };
+
     use super::*;
 
     struct TestCase<In, Out> {
@@ -555,8 +624,6 @@ mod tests {
             "#12345",
             "#1234567",
             "#ggg",
-            "fff",
-            "  #fff  ",
             "rgb()",
             "rgb(255)",
             "rgb(255, 255)",
@@ -1594,7 +1661,7 @@ mod tests {
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
 
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1617,7 +1684,7 @@ mod tests {
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
 
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1641,7 +1708,7 @@ mod tests {
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
 
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1663,7 +1730,7 @@ mod tests {
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
 
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1685,7 +1752,7 @@ mod tests {
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
 
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1710,7 +1777,7 @@ mod tests {
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
 
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let success_lines: Vec<&str> = successes.lines().collect();
@@ -1743,7 +1810,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1764,7 +1831,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1791,7 +1858,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1812,7 +1879,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1841,7 +1908,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1870,7 +1937,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1896,7 +1963,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1924,7 +1991,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1950,7 +2017,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -1971,7 +2038,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -2006,7 +2073,7 @@ mod tests {
 
             let mut w_buf = Vec::new();
             let mut l_buf = Vec::new();
-            log_conversion_results(&results, &mut w_buf, &mut l_buf);
+            log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
             let successes = String::from_utf8(w_buf)?;
             let errors = String::from_utf8(l_buf)?;
@@ -2045,7 +2112,7 @@ mod tests {
 
         let mut w_buf = Vec::new();
         let mut l_buf = Vec::new();
-        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+        log_conversion_results(&results, false, &mut w_buf, &mut l_buf);
 
         let successes = String::from_utf8(w_buf)?;
         let errors = String::from_utf8(l_buf)?;
@@ -2073,5 +2140,305 @@ mod tests {
         assert_eq!(Color::Oklab, identify_color("oklab(-0.1 0.2 0.1)")?);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_replace_colors() -> Result<()> {
+        let content = r"
+        rgba(255,255,255 10%)
+        #fff
+        rgb(255,255,255)
+        oklab(1 1 0/90)
+        oklch(1 1 0/90)
+            ";
+
+        let replaced = replace_colors("rgba", content, Color::Hex)?;
+
+        assert!(replaced.contains("#ffffff1a"));
+        assert!(!replaced.contains("rgba(255,255,255 10%)"));
+        assert_eq!(
+            replaced,
+            content.replace("rgba(255,255,255 10%)", "#ffffff1a")
+        );
+
+        Ok(())
+    }
+
+    fn check_replace(
+        pattern: &str,
+        content: &str,
+        output: Color,
+        expected_conversions: &[(&str, &str)],
+    ) -> Result<()> {
+        let replaced = replace_colors(pattern, content, output)?;
+
+        let mut expected = content.to_string();
+        for (token, converted) in expected_conversions {
+            assert!(
+                replaced.contains(converted),
+                "expected {pattern} token {token} converted to {converted}, got:\n{replaced}"
+            );
+            assert!(
+                !replaced.contains(token),
+                "expected {pattern} token {token} to be replaced, got:\n{replaced}"
+            );
+            expected = expected.replace(token, converted);
+        }
+        assert_eq!(replaced, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_colors_hex_to_oklch() -> Result<()> {
+        let content = "body {
+  color: #fff;
+  border: 1px solid rgb(255, 0, 0);
+  background: rgba(255,255,255, 50%);
+  box-shadow: oklab(0.5 0.1 0.1);
+  filter: oklch(0.5 0.2 300);
+}
+";
+        check_replace(
+            "hex",
+            content,
+            Color::Oklch,
+            &[(
+                "#fff",
+                "oklch(1.00000102817238 0.00003887250067408087 72.60561225992106)",
+            )],
+        )
+    }
+
+    #[test]
+    fn test_replace_colors_rgb_to_rgba() -> Result<()> {
+        let content = "body {
+  color: #fff;
+  border: 1px solid rgb(255, 0, 0);
+  background: rgba(255,255,255, 50%);
+  box-shadow: oklab(0.5 0.1 0.1);
+  filter: oklch(0.5 0.2 300);
+}
+";
+        check_replace(
+            "rgb",
+            content,
+            Color::Rgba,
+            &[("rgb(255, 0, 0)", "rgba(255, 0, 0, 1)")],
+        )
+    }
+
+    #[test]
+    fn test_replace_colors_oklab_to_rgb() -> Result<()> {
+        let content = "body {
+  color: #fff;
+  border: 1px solid rgb(255, 0, 0);
+  background: rgba(255,255,255, 50%);
+  box-shadow: oklab(0.5 0.1 0.1);
+  filter: oklch(0.5 0.2 300);
+}
+";
+        check_replace(
+            "oklab",
+            content,
+            Color::Rgb,
+            &[("oklab(0.5 0.1 0.1)", "rgb(161, 66, 3)")],
+        )
+    }
+
+    #[test]
+    fn test_replace_colors_oklch_to_oklab() -> Result<()> {
+        let content = "body {
+  color: #fff;
+  border: 1px solid rgb(255, 0, 0);
+  background: rgba(255,255,255, 50%);
+  box-shadow: oklab(0.5 0.1 0.1);
+  filter: oklch(0.5 0.2 300);
+}
+";
+        check_replace(
+            "oklch",
+            content,
+            Color::Oklab,
+            &[(
+                "oklch(0.5 0.2 300)",
+                "oklab(0.5000007475991664 0.09999559000652258 -0.17311572182554913)",
+            )],
+        )
+    }
+
+    #[test]
+    fn test_replace_colors_multiple_hex_to_rgb() -> Result<()> {
+        let content = "color: #abc;
+border-color: #00ff00;
+";
+        check_replace(
+            "hex",
+            content,
+            Color::Rgb,
+            &[
+                ("#abc", "rgb(170, 187, 204)"),
+                ("#00ff00", "rgb(0, 255, 0)"),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_replace_colors_no_matches() -> Result<()> {
+        let content = "plain text with no color tokens";
+        let replaced = replace_colors("hex", content, Color::Hex)?;
+
+        assert_eq!(replaced, content);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_file_replacement() -> Result<()> {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let input_file = temp.child("test-color-replacement.txt");
+
+        input_file
+            .write_str(
+                r"
+        rgba(255,255,255 10%)
+        #fff
+        rgb(255,255,255)
+        oklab(1 1 0/90)
+        oklch(1 1 0/90)
+            ",
+            )
+            .unwrap();
+
+        replace_in_file(input_file.path().to_owned(), "rgba", Color::Hex, false)?;
+
+        input_file.assert(
+            r"
+        #ffffff1a
+        #fff
+        rgb(255,255,255)
+        oklab(1 1 0/90)
+        oklch(1 1 0/90)
+            ",
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_file_replacement_hex_to_oklch() -> Result<()> {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let input_file = temp.child("hex-file.txt");
+        let content = "body {\n  color: #fff;\n}\n";
+
+        input_file.write_str(content).unwrap();
+
+        replace_in_file(input_file.path().to_owned(), "hex", Color::Oklch, false)?;
+
+        input_file.assert(
+            "body {\n  color: oklch(1.00000102817238 0.00003887250067408087 72.60561225992106);\n}\n",
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_file_replacement_rgb_to_rgba() -> Result<()> {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let input_file = temp.child("rgb-file.txt");
+        let content = "border: 1px solid rgb(255, 0, 0);\n";
+
+        input_file.write_str(content).unwrap();
+
+        replace_in_file(input_file.path().to_owned(), "rgb", Color::Rgba, false)?;
+
+        input_file.assert("border: 1px solid rgba(255, 0, 0, 1);\n");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_file_replacement_oklab_to_rgb() -> Result<()> {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let input_file = temp.child("oklab-file.txt");
+        let content = "box-shadow: oklab(0.5 0.1 0.1);\n";
+
+        input_file.write_str(content).unwrap();
+
+        replace_in_file(input_file.path().to_owned(), "oklab", Color::Rgb, false)?;
+
+        input_file.assert("box-shadow: rgb(161, 66, 3);\n");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_file_replacement_oklch_to_oklab() -> Result<()> {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let input_file = temp.child("oklch-file.txt");
+        let content = "filter: oklch(0.5 0.2 300);\n";
+
+        input_file.write_str(content).unwrap();
+
+        replace_in_file(input_file.path().to_owned(), "oklch", Color::Oklab, false)?;
+
+        input_file.assert(
+            "filter: oklab(0.5000007475991664 0.09999559000652258 -0.17311572182554913);\n",
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_file_replacement_multiple_matches() -> Result<()> {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let input_file = temp.child("multi-file.txt");
+        let content = "color: #abc;\nborder-color: #00ff00;\n";
+
+        input_file.write_str(content).unwrap();
+
+        replace_in_file(input_file.path().to_owned(), "hex", Color::Rgb, false)?;
+
+        input_file.assert("color: rgb(170, 187, 204);\nborder-color: rgb(0, 255, 0);\n");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_file_replacement_dry_run_does_not_modify() -> Result<()> {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let input_file = temp.child("dry-run-file.txt");
+        let content = "color: #fff;\n";
+
+        input_file.write_str(content).unwrap();
+
+        replace_in_file(input_file.path().to_owned(), "hex", Color::Rgb, true)?;
+
+        input_file.assert(content);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_file_replacement_no_matches() -> Result<()> {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let input_file = temp.child("no-match-file.txt");
+        let content = "no colors here\n";
+
+        input_file.write_str(content).unwrap();
+
+        replace_in_file(input_file.path().to_owned(), "hex", Color::Hex, false)?;
+
+        input_file.assert(content);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_file_replacement_missing_file_err() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let missing = temp.path().join("does-not-exist.txt");
+
+        assert!(replace_in_file(missing, "hex", Color::Hex, false).is_err());
     }
 }

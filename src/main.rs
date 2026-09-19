@@ -28,7 +28,7 @@ enum ColorCmds {
         /// "#fff"
         colors: Vec<String>,
 
-        /// Output color space (hex, rgb, rgba, oklab, oklch)
+        /// Output color space
         #[arg(short, long, value_enum)]
         output: color::Color,
 
@@ -39,13 +39,21 @@ enum ColorCmds {
 
     /// Replace colors from a file with converted color values
     Replace {
-        /// Pattern to match
-        #[arg(short, long, value_enum)]
-        pattern: color::Color,
+        /// Pattern to match. [possible values: hex, rgb, rgba, oklab, oklch, exact color string
+        /// (regexes are not allowed)]
+        #[arg(short, long)]
+        pattern: String,
 
         /// Path to file
         #[arg(short, long)]
         file: PathBuf,
+
+        /// Output format for matched colors
+        #[arg(short, long, value_enum)]
+        output: color::Color,
+
+        #[arg(short, long, default_value_t = false)]
+        dry_run: bool,
     },
 }
 
@@ -74,8 +82,13 @@ fn main() -> Result<()> {
                     &mut l_writer,
                 );
             }
-            ColorCmds::Replace { pattern, file } => {
-                println!("pattern: {:?} file: {}", pattern, file.display())
+            ColorCmds::Replace {
+                pattern,
+                file,
+                output,
+                dry_run,
+            } => {
+                color::replace_in_file(file, &pattern, output, dry_run)?;
             }
         },
     }

@@ -8,3 +8,6 @@ description = "A collection of utilities"
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 regex = "1.13.1"
+
+[dev-dependencies]
+assert_fs = "1.1.4"
