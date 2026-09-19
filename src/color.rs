@@ -1,7 +1,8 @@
-use anyhow::{Ok, Result, bail};
+use anyhow::{Result, bail};
 use clap::ValueEnum;
 use regex::Regex;
-use std::sync::LazyLock;
+use std::io::Write;
+use std::{fmt::Display, sync::LazyLock};
 
 static HEX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3}|[A-Fa-f0-9]{4}|[A-Fa-f0-9]{8})$").unwrap()
@@ -12,16 +13,16 @@ static RGB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static RGBA_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^rgba\s*\(\s*([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)\s*\)\s*$")
+    Regex::new(r"(?i)^rgba\s*\(\s*([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+)[, ]+([.\d]+%?)\s*\)\s*$")
         .unwrap()
 });
 
 static OKLAB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^oklab\s*\(\s*([.\d]+%?)[, ]+([.\d]+%?)[, ]+([.\d]+%?)\s*(?:[/,]\s*([.\d]+%?)\s*)?\)\s*$").unwrap()
+    Regex::new(r"(?i)^oklab\s*\(\s*(-?[.\d]+%?)[, ]+(-?[.\d]+%?)[, ]+(-?[.\d]+%?)\s*(?:[/, ]\s*([.\d]+%?)\s*)?\)\s*$").unwrap()
 });
 
 static OKLCH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^oklch\s*\(\s*([.\d]+%?)[, ]+([.\d]+%?)[, ]+([.\d]+(?:deg)?%?)\s*(?:[/,]\s*([.\d]+%?)\s*)?\)\s*$").unwrap()
+    Regex::new(r"(?i)^oklch\s*\(\s*([.\d]+%?)[, ]+([.\d]+%?)[, ]+(-?[.\d]+(?:deg)?%?)\s*(?:[/, ]\s*([.\d]+%?)\s*)?\)\s*$").unwrap()
 });
 
 #[derive(Debug, PartialEq, Eq, Clone, ValueEnum)]
@@ -126,9 +127,7 @@ fn parse_rgba(color: &str) -> Result<Rgba> {
     let r = parse_unit_aware(&parts[0], 255.0, |v| v.round() as u8)?;
     let g = parse_unit_aware(&parts[1], 255.0, |v| v.round() as u8)?;
     let b = parse_unit_aware(&parts[2], 255.0, |v| v.round() as u8)?;
-    let alpha = parts
-        .get(3)
-        .map_or(Ok(1.0), |a| parse_unit_aware(a, 1.0, |v| v))?;
+    let alpha = parts.get(3).map_or(Ok(1.0), |a| parse_alpha(a))?;
 
     Ok(Rgba { r, g, b, alpha })
 }
@@ -143,9 +142,7 @@ fn parse_oklab(color: &str) -> Result<Oklab> {
     let l = parse_unit_aware(&parts[0], 1.0, |v| v)?;
     let a = parse_unit_aware(&parts[1], 1.0, |v| v)?;
     let b = parse_unit_aware(&parts[2], 1.0, |v| v)?;
-    let alpha = parts
-        .get(3)
-        .map_or(Ok(1.0), |a| parse_unit_aware(a, 1.0, |v| v))?;
+    let alpha = parts.get(3).map_or(Ok(1.0), |a| parse_alpha(a))?;
 
     Ok(Oklab { l, a, b, alpha })
 }
@@ -160,9 +157,7 @@ fn parse_oklch(color: &str) -> Result<Oklch> {
     let l = parse_unit_aware(&parts[0], 1.0, |v| v)?;
     let c = parse_unit_aware(&parts[1], 1.0, |v| v)?;
     let h = parse_unit_aware(&parts[2], 1.0, |v| v)?;
-    let alpha = parts
-        .get(3)
-        .map_or(Ok(1.0), |a| parse_unit_aware(a, 1.0, |v| v))?;
+    let alpha = parts.get(3).map_or(Ok(1.0), |a| parse_alpha(a))?;
 
     Ok(Oklch { l, c, h, alpha })
 }
@@ -189,6 +184,14 @@ fn parse_unit_aware<T>(s: &str, max: f64, convert: impl Fn(f64) -> T) -> Result<
     };
 
     Ok(convert(value))
+}
+
+fn parse_alpha(s: &str) -> Result<f64> {
+    let alpha = parse_unit_aware(s, 1.0, |v| v)?;
+    if alpha < 0.0 || alpha > 1.0 {
+        bail!("alpha value out of range. expected value between 0 and 1");
+    }
+    Ok(alpha)
 }
 
 fn srgb_to_linear(v: f64) -> f64 {
@@ -314,6 +317,129 @@ impl FromXyz for Oklch {
     }
 }
 
+impl Display for Rgba {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "rgba({}, {}, {}, {})",
+            self.r, self.g, self.b, self.alpha
+        )
+    }
+}
+
+impl Display for Oklab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.alpha == 1.0 {
+            write!(f, "oklab({} {} {})", self.l, self.a, self.b)
+        } else {
+            write!(
+                f,
+                "oklab({} {} {} / {})",
+                self.l, self.a, self.b, self.alpha
+            )
+        }
+    }
+}
+
+impl Display for Oklch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.alpha == 1.0 {
+            write!(f, "oklch({} {} {})", self.l, self.c, self.h)
+        } else {
+            write!(
+                f,
+                "oklch({} {} {} / {})",
+                self.l, self.c, self.h, self.alpha
+            )
+        }
+    }
+}
+
+fn rgba_to_hex_string(rgba: &Rgba) -> String {
+    if rgba.alpha == 1.0 {
+        format!("#{:02x}{:02x}{:02x}", rgba.r, rgba.g, rgba.b)
+    } else {
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            rgba.r,
+            rgba.g,
+            rgba.b,
+            (rgba.alpha * 255.0).round().clamp(0.0, 255.0) as u8
+        )
+    }
+}
+fn rgba_to_rgb_string(rgba: &Rgba) -> String {
+    format!("rgb({}, {}, {})", rgba.r, rgba.g, rgba.b)
+}
+
+fn convert(color: &str, target: &Color) -> Result<String> {
+    let source = identify_color(color)?;
+
+    let (xyz, alpha) = match source {
+        Color::Hex | Color::Rgb | Color::Rgba => {
+            let rgba = if source == Color::Hex {
+                parse_hex(color)?
+            } else {
+                parse_rgba(color)?
+            };
+
+            (rgba.to_xyz(), rgba.alpha)
+        }
+        Color::Oklab => {
+            let oklab = parse_oklab(color)?;
+            (oklab.to_xyz(), oklab.alpha)
+        }
+        Color::Oklch => {
+            let oklch = parse_oklch(color)?;
+            (oklch.to_xyz(), oklch.alpha)
+        }
+    };
+
+    match target {
+        Color::Hex | Color::Rgb | Color::Rgba => {
+            let rgba = Rgba::from_xyz(&xyz, alpha);
+            if target == &Color::Hex {
+                Ok(rgba_to_hex_string(&rgba))
+            } else if target == &Color::Rgb {
+                Ok(rgba_to_rgb_string(&rgba))
+            } else {
+                Ok(format!("{}", rgba))
+            }
+        }
+        Color::Oklab => Ok(format!("{}", Oklab::from_xyz(&xyz, alpha))),
+        Color::Oklch => Ok(format!("{}", Oklch::from_xyz(&xyz, alpha))),
+    }
+}
+
+pub fn convert_colors(colors: &[String], target: &Color) -> Vec<Result<(String, String)>> {
+    colors
+        .iter()
+        .map(|color| convert(color, target).map(|converted| (color.to_string(), converted)))
+        .collect()
+}
+
+pub fn log_conversion_results(
+    results: &[Result<(String, String)>],
+    output_only: bool,
+    w_writer: &mut impl Write,
+    l_writer: &mut impl Write,
+) {
+    for r in results {
+        match r {
+            Ok((original, converted)) => {
+                if output_only {
+                    let _ = writeln!(w_writer, "{converted}");
+                } else {
+                    let _ = writeln!(w_writer, "{original} -> {converted}");
+                }
+            }
+            Err(e) => {
+                let _ = writeln!(l_writer, "error: {e}");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,6 +496,7 @@ mod tests {
         let comma_alpha = String::from("oklab(0.5, 0.2, 0.1, 1)");
         let with_percent = String::from("oklab(50% 0.2 0.1% / 25%)");
         let mixed_sep = String::from("oklab(0.5, 0.2 0.1)");
+        let space_separated_alpha = String::from("oklab(0.5, 0.2 0.1 0.9)");
 
         assert_eq!(Color::Oklab, identify_color(&space_sep)?);
         assert_eq!(Color::Oklab, identify_color(&comma_sep)?);
@@ -377,6 +504,7 @@ mod tests {
         assert_eq!(Color::Oklab, identify_color(&comma_alpha)?);
         assert_eq!(Color::Oklab, identify_color(&with_percent)?);
         assert_eq!(Color::Oklab, identify_color(&mixed_sep)?);
+        assert_eq!(Color::Oklab, identify_color(&space_separated_alpha)?);
 
         Ok(())
     }
@@ -437,7 +565,6 @@ mod tests {
             "oklab()",
             "oklab(1 2)",
             "oklab(1 2 3 /)",
-            "oklch(1 2 3 4)",
             "hsl(120, 50%, 50%)",
             "hsla(120, 50%, 50%, 1)",
             "not a color",
@@ -611,21 +738,30 @@ mod tests {
                 },
             },
             TestCase {
-                input: "rgba(255, 0, 0, 128)".to_owned(),
+                input: "rgba(255, 0, 0, 0.5)".to_owned(),
                 output: Rgba {
                     r: 255,
                     g: 0,
                     b: 0,
-                    alpha: 128.0,
+                    alpha: 0.5,
                 },
             },
             TestCase {
-                input: "rgba(1 3 255 128)".to_owned(),
+                input: "rgba(255 0 0 0.5)".to_owned(),
+                output: Rgba {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    alpha: 0.5,
+                },
+            },
+            TestCase {
+                input: "rgba(1 3 255 0.5)".to_owned(),
                 output: Rgba {
                     r: 1,
                     g: 3,
                     b: 255,
-                    alpha: 128.0,
+                    alpha: 0.5,
                 },
             },
             TestCase {
@@ -656,21 +792,21 @@ mod tests {
                 },
             },
             TestCase {
-                input: "rgba (255, 0, 0, 128)".to_owned(),
+                input: "rgba (255, 0, 0, 0.5)".to_owned(),
                 output: Rgba {
                     r: 255,
                     g: 0,
                     b: 0,
-                    alpha: 128.0,
+                    alpha: 0.5,
                 },
             },
             TestCase {
-                input: "rgba  (1 3, 255, 128)  ".to_owned(),
+                input: "rgba  (1 3, 255, 0.5)  ".to_owned(),
                 output: Rgba {
                     r: 1,
                     g: 3,
                     b: 255,
-                    alpha: 128.0,
+                    alpha: 0.5,
                 },
             },
             TestCase {
@@ -687,6 +823,24 @@ mod tests {
         for h in test_cases {
             assert_eq!(parse_rgba(&h.input)?, h.output);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_alpha() -> Result<()> {
+        assert_eq!(parse_alpha("0")?, 0.0);
+        assert_eq!(parse_alpha("0.0")?, 0.0);
+        assert_eq!(parse_alpha("0.5")?, 0.5);
+        assert_eq!(parse_alpha("1")?, 1.0);
+        assert_eq!(parse_alpha("1.0")?, 1.0);
+        assert_eq!(parse_alpha("50%")?, 0.5);
+        assert_eq!(parse_alpha("100%")?, 1.0);
+
+        assert!(parse_alpha("-0.1").is_err());
+        assert!(parse_alpha("1.1").is_err());
+        assert!(parse_alpha("101%").is_err());
+        assert!(parse_alpha("200%").is_err());
 
         Ok(())
     }
@@ -731,7 +885,17 @@ mod tests {
                 },
             },
             TestCase {
+                input: "oklab(0.5 0.2 0.1 / 0.8)".to_owned(),
+                output: Oklab {
+                    l: 0.5,
+                    a: 0.2,
+                    b: 0.1,
+                    alpha: 0.8,
+                },
+            },
+            TestCase {
                 input: "oklab(0.5, 0.2, 0.1, 0.5)".to_owned(),
+
                 output: Oklab {
                     l: 0.5,
                     a: 0.2,
@@ -824,7 +988,17 @@ mod tests {
                 },
             },
             TestCase {
+                input: "oklch(0.5 0.2 300 / 0.8)".to_owned(),
+                output: Oklch {
+                    l: 0.5,
+                    c: 0.2,
+                    h: 300.0,
+                    alpha: 0.8,
+                },
+            },
+            TestCase {
                 input: "oklch(0.5, 0.2, 300, 0.5)".to_owned(),
+
                 output: Oklch {
                     l: 0.5,
                     c: 0.2,
@@ -873,6 +1047,1030 @@ mod tests {
         for tc in test_cases {
             assert_eq!(parse_oklch(&tc.input)?, tc.output);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_xyz_conversions() {
+        let rgba = Rgba {
+            r: 255,
+            g: 0,
+            b: 0,
+            alpha: 1.0,
+        };
+        let xyz = rgba.to_xyz();
+        let rgba_back = Rgba::from_xyz(&xyz, 1.0);
+
+        assert!((rgba.r as f64 - rgba_back.r as f64).abs() < 1.0);
+        assert!((rgba.g as f64 - rgba_back.g as f64).abs() < 1.0);
+        assert!((rgba.b as f64 - rgba_back.b as f64).abs() < 1.0);
+
+        let oklab = Oklab {
+            l: 0.5,
+            a: 0.1,
+            b: 0.1,
+            alpha: 1.0,
+        };
+        let xyz_lab = oklab.to_xyz();
+        let oklab_back = Oklab::from_xyz(&xyz_lab, 1.0);
+
+        assert!((oklab.l - oklab_back.l).abs() < 1e-4);
+        assert!((oklab.a - oklab_back.a).abs() < 1e-4);
+        assert!((oklab.b - oklab_back.b).abs() < 1e-4);
+
+        let oklch = Oklch {
+            l: 0.5,
+            c: 0.1,
+            h: 120.0,
+            alpha: 1.0,
+        };
+        let xyz_lch = oklch.to_xyz();
+        let oklch_back = Oklch::from_xyz(&xyz_lch, 1.0);
+
+        assert!((oklch.l - oklch_back.l).abs() < 1e-4);
+        assert!((oklch.c - oklch_back.c).abs() < 1e-4);
+        assert!((oklch.h - oklch_back.h).abs() < 1e-1);
+    }
+
+    #[test]
+    fn test_rgba_to_hex_string() {
+        let test_cases = vec![
+            TestCase {
+                input: Rgba {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    alpha: 1.0,
+                },
+                output: "#ffffff",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    alpha: 1.0,
+                },
+                output: "#000000",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    alpha: 1.0,
+                },
+                output: "#ff0000",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 0,
+                    g: 255,
+                    b: 0,
+                    alpha: 1.0,
+                },
+                output: "#00ff00",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 255,
+                    alpha: 1.0,
+                },
+                output: "#0000ff",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    alpha: 1.0,
+                },
+                output: "#010203",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 17,
+                    g: 34,
+                    b: 51,
+                    alpha: 1.0,
+                },
+                output: "#112233",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    alpha: 1.0,
+                },
+                output: "#0a141e",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 128,
+                    g: 128,
+                    b: 128,
+                    alpha: 0.0,
+                },
+                output: "#80808000",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    alpha: 0.5,
+                },
+                output: "#ffffff80",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    alpha: 0.5,
+                },
+                output: "#00000080",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    alpha: 1.0 / 3.0,
+                },
+                output: "#ffffff55",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 12,
+                    g: 34,
+                    b: 56,
+                    alpha: 0.25,
+                },
+                output: "#0c223840",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    alpha: 0.9999,
+                },
+                output: "#ffffffff",
+            },
+            // Note: alpha is validated by parse_alpha and always in [0.0, 1.0]
+            // (and hex parsing yields [0.0, 1.0] too), so no out-of-range cases here.
+        ];
+
+        for case in test_cases {
+            assert_eq!(rgba_to_hex_string(&case.input), case.output);
+        }
+    }
+
+    #[test]
+    fn test_rgba_to_rgb_string() {
+        let test_cases = vec![
+            TestCase {
+                input: Rgba {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    alpha: 1.0,
+                },
+                output: "rgb(255, 0, 0)",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    alpha: 1.0,
+                },
+                output: "rgb(0, 0, 0)",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    alpha: 0.0,
+                },
+                output: "rgb(1, 2, 3)",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    alpha: 0.5,
+                },
+                output: "rgb(10, 20, 30)",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 128,
+                    g: 64,
+                    b: 32,
+                    alpha: 0.25,
+                },
+                output: "rgb(128, 64, 32)",
+            },
+        ];
+
+        for case in test_cases {
+            assert_eq!(rgba_to_rgb_string(&case.input), case.output);
+        }
+    }
+
+    #[test]
+    fn test_rgba_to_rgba_string() {
+        let test_cases = vec![
+            TestCase {
+                input: Rgba {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    alpha: 1.0,
+                },
+                output: "rgba(255, 255, 255, 1)",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    alpha: 0.0,
+                },
+                output: "rgba(0, 0, 0, 0)",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    alpha: 0.5,
+                },
+                output: "rgba(255, 0, 0, 0.5)",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    alpha: 0.1,
+                },
+                output: "rgba(1, 2, 3, 0.1)",
+            },
+            TestCase {
+                input: Rgba {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    alpha: 1.0 / 3.0,
+                },
+                output: "rgba(10, 20, 30, 0.3333333333333333)",
+            },
+        ];
+
+        for case in test_cases {
+            assert_eq!(format!("{}", case.input), case.output);
+        }
+    }
+
+    #[test]
+    fn test_oklch_to_oklch_string() {
+        let test_cases = vec![
+            TestCase {
+                input: Oklch {
+                    l: 0.5,
+                    c: 0.2,
+                    h: 300.0,
+                    alpha: 1.0,
+                },
+                output: "oklch(0.5 0.2 300)",
+            },
+            TestCase {
+                input: Oklch {
+                    l: 0.0,
+                    c: 0.0,
+                    h: 0.0,
+                    alpha: 1.0,
+                },
+                output: "oklch(0 0 0)",
+            },
+            TestCase {
+                input: Oklch {
+                    l: 1.0,
+                    c: 0.4,
+                    h: 360.0,
+                    alpha: 1.0,
+                },
+                output: "oklch(1 0.4 360)",
+            },
+            TestCase {
+                input: Oklch {
+                    l: 0.5,
+                    c: 0.2,
+                    h: 300.0,
+                    alpha: 0.5,
+                },
+                output: "oklch(0.5 0.2 300 / 0.5)",
+            },
+            TestCase {
+                input: Oklch {
+                    l: 0.7,
+                    c: 0.1,
+                    h: 120.0,
+                    alpha: 0.0,
+                },
+                output: "oklch(0.7 0.1 120 / 0)",
+            },
+        ];
+
+        for case in test_cases {
+            assert_eq!(format!("{}", case.input), case.output);
+        }
+    }
+
+    #[test]
+    fn test_oklab_to_oklab_string() {
+        let test_cases = vec![
+            TestCase {
+                input: Oklab {
+                    l: 0.5,
+                    a: 0.1,
+                    b: 0.1,
+                    alpha: 1.0,
+                },
+                output: "oklab(0.5 0.1 0.1)",
+            },
+            TestCase {
+                input: Oklab {
+                    l: 0.0,
+                    a: 0.0,
+                    b: 0.0,
+                    alpha: 1.0,
+                },
+                output: "oklab(0 0 0)",
+            },
+            TestCase {
+                input: Oklab {
+                    l: 1.0,
+                    a: -0.2,
+                    b: 0.3,
+                    alpha: 1.0,
+                },
+                output: "oklab(1 -0.2 0.3)",
+            },
+            TestCase {
+                input: Oklab {
+                    l: 0.5,
+                    a: 0.1,
+                    b: -0.1,
+                    alpha: 0.5,
+                },
+                output: "oklab(0.5 0.1 -0.1 / 0.5)",
+            },
+            TestCase {
+                input: Oklab {
+                    l: 0.7,
+                    a: 0.0,
+                    b: 0.0,
+                    alpha: 0.0,
+                },
+                output: "oklab(0.7 0 0 / 0)",
+            },
+        ];
+
+        for case in test_cases {
+            assert_eq!(format!("{}", case.input), case.output);
+        }
+    }
+
+    #[test]
+    fn test_convert() -> Result<()> {
+        let test_cases = vec![
+            ("#ff0000", Color::Hex, "#ff0000"),
+            ("#f00", Color::Hex, "#ff0000"),
+            ("#00ff0080", Color::Hex, "#00ff0080"),
+            // target Rgb: hex input's r/g/b carry through, alpha is dropped.
+            ("#ff0000", Color::Rgb, "rgb(255, 0, 0)"),
+            // target Rgba: hex input's implicit alpha (1.0) is now shown explicitly.
+            ("#ff0000", Color::Rgba, "rgba(255, 0, 0, 1)"),
+            ("#00ff0080", Color::Rgb, "rgb(0, 255, 0)"),
+            // 0x80 / 255 = 0.5019607843137255
+            (
+                "#00ff0080",
+                Color::Rgba,
+                "rgba(0, 255, 0, 0.5019607843137255)",
+            ),
+            ("rgb(255, 0, 0)", Color::Rgb, "rgb(255, 0, 0)"),
+            ("rgb(10, 20, 30)", Color::Rgb, "rgb(10, 20, 30)"),
+            // target Rgba: rgb input's implicit alpha (1.0) is now shown explicitly.
+            ("rgb(10, 20, 30)", Color::Rgba, "rgba(10, 20, 30, 1)"),
+            // target Rgb: rgba input's alpha is dropped.
+            ("rgba(10, 20, 30, 0.5)", Color::Rgb, "rgb(10, 20, 30)"),
+            (
+                "rgba(10, 20, 30, 0.5)",
+                Color::Rgba,
+                "rgba(10, 20, 30, 0.5)",
+            ),
+            (
+                "#ff0000",
+                Color::Oklab,
+                "oklab(0.627988706625623 0.22487488313589232 0.1258529885009403)",
+            ),
+            (
+                "#ff0000",
+                Color::Oklch,
+                "oklch(0.627988706625623 0.2576968912889696 29.23389948383784)",
+            ),
+            (
+                "rgb(255, 0, 0)",
+                Color::Oklab,
+                "oklab(0.627988706625623 0.22487488313589232 0.1258529885009403)",
+            ),
+            (
+                "oklab(0.5 0.1 0.1)",
+                Color::Oklab,
+                "oklab(0.5000010922212974 0.10002486431431906 0.1000439314724102)",
+            ),
+            (
+                "oklab(0.5 0.1 0.1)",
+                Color::Oklch,
+                "oklch(0.5000010922212974 0.14147000284708502 45.00546046012987)",
+            ),
+            // target Hex: must now produce a hex string, not rgba(...).
+            // r=161=0xa1, g=66=0x42, b=3=0x03, alpha=1.0 -> 6-digit hex.
+            ("oklab(0.5 0.1 0.1)", Color::Hex, "#a14203"),
+            (
+                "oklch(0.5 0.2 300)",
+                Color::Oklch,
+                "oklch(0.5000007475991664 0.19992041207423886 300.0117102735574)",
+            ),
+            (
+                "oklch(0.5 0.2 300)",
+                Color::Oklab,
+                "oklab(0.5000007475991664 0.09999559000652258 -0.17311572182554913)",
+            ),
+            // target Hex: r=119=0x77, g=58=0x3a, b=193=0xc1, alpha=1.0 -> 6-digit hex.
+            ("oklch(0.5 0.2 300)", Color::Hex, "#773ac1"),
+        ];
+
+        for (input, target, output) in test_cases {
+            assert_eq!(convert(input, &target)?, output);
+        }
+
+        let invalid = ["not-a-color", "#12345", "rgb(1, 2)", "oklab(0.5 0.1)"];
+        for input in invalid {
+            assert!(convert(input, &Color::Hex).is_err());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_batch_conversion_all_valid() -> Result<()> {
+        let colors: Vec<String> = vec!["#ff0000", "rgb(0, 255, 0)", "rgba(0, 0, 255, 0.5)"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let results = convert_colors(&colors, &Color::Hex);
+
+        assert_eq!(results.len(), colors.len());
+        for (i, r) in results.iter().enumerate() {
+            assert!(r.is_ok(), "expected success for {}: {:?}", colors[i], r);
+        }
+
+        // Spot-check that each result pairs the original input with a converted value.
+        let (original, converted) = results[0].as_ref().unwrap();
+        assert_eq!(original, "#ff0000");
+        assert!(converted.starts_with('#'));
+
+        let (_, converted_alpha) = results[2].as_ref().unwrap();
+        // rgba with alpha < 1 should produce an 8-digit hex (with alpha channel)
+        assert_eq!(converted_alpha.len(), 9); // "#" + 8 hex digits
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_batch_conversion_mixed_valid_invalid() -> Result<()> {
+        let colors: Vec<String> = vec![
+            "#ff0000".to_string(),
+            "not-a-color".to_string(),
+            "rgb(0, 255, 0)".to_string(),
+            "oklab(0.5 0.1)".to_string(), // invalid arity
+        ];
+
+        let results = convert_colors(&colors, &Color::Hex);
+
+        assert_eq!(results.len(), colors.len());
+        assert!(results[0].is_ok(), "expected #ff0000 to succeed");
+        assert!(results[1].is_err(), "expected not-a-color to fail");
+        assert!(results[2].is_ok(), "expected rgb(...) to succeed");
+        assert!(results[3].is_err(), "expected malformed oklab to fail");
+
+        // Order must be preserved — index in results matches index in input.
+        let (original, _) = results[0].as_ref().unwrap();
+        assert_eq!(original, "#ff0000");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs() -> Result<()> {
+        let colors: Vec<String> = vec!["#fff", "rgba(255,255,255, 1)"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let results = convert_colors(&colors, &Color::Oklab);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(errors.is_empty(), "expected no errors, got: {errors}");
+        assert!(successes.contains("#fff ->"));
+        assert!(successes.contains("rgba(255,255,255, 1) ->"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_with_invalid_color() -> Result<()> {
+        let colors: Vec<String> = vec!["#fff", "not-a-color", "rgba(255,255,255, 1)"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let results = convert_colors(&colors, &Color::Oklab);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(successes.contains("#fff ->"));
+        assert!(successes.contains("rgba(255,255,255, 1) ->"));
+        assert_eq!(errors.lines().count(), 1);
+        assert!(errors.starts_with("error:"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_all_invalid() -> Result<()> {
+        let colors: Vec<String> = vec!["garbage", "#zzz", "rgba(1,2,3,4,5)"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let results = convert_colors(&colors, &Color::Oklch);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(
+            successes.is_empty(),
+            "expected no successes, got: {successes}"
+        );
+        assert_eq!(errors.lines().count(), 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_empty_input() -> Result<()> {
+        let colors: Vec<String> = Vec::new();
+        let results = convert_colors(&colors, &Color::Rgb);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(successes.is_empty());
+        assert!(errors.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_hex_to_hex_roundtrip() -> Result<()> {
+        let colors: Vec<String> = vec!["#ff0000", "#00ff00", "#0000ff"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let results = convert_colors(&colors, &Color::Hex);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(errors.is_empty(), "expected no errors, got: {errors}");
+        assert_eq!(successes.lines().count(), 3);
+        assert!(successes.contains("#ff0000 -> #ff0000"));
+        assert!(successes.contains("#00ff00 -> #00ff00"));
+        assert!(successes.contains("#0000ff -> #0000ff"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_preserves_order() -> Result<()> {
+        let colors: Vec<String> = vec!["#fff", "bad-input", "#000"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let results = convert_colors(&colors, &Color::Oklab);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let success_lines: Vec<&str> = successes.lines().collect();
+
+        assert_eq!(success_lines.len(), 2);
+        assert!(success_lines[0].starts_with("#fff ->"));
+        assert!(success_lines[1].starts_with("#000 ->"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_hex_edge_cases() -> Result<()> {
+        let colors: Vec<String> = vec![
+            "#fff",
+            "#000",
+            "#ffff",
+            "#0000",
+            "#ffffff",
+            "#000000",
+            "#ffffffff",
+            "#00000000",
+            "#ABC",
+            "#FfFfFf",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let results = convert_colors(&colors, &Color::Hex);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(errors.is_empty(), "unexpected errors: {errors}");
+        assert_eq!(successes.lines().count(), colors.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_hex_invalid_lengths() -> Result<()> {
+        let colors: Vec<String> = vec!["#f", "#ff", "#12345", "#1234567", "#123456789", "#gggggg"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let results = convert_colors(&colors, &Color::Hex);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(successes.is_empty(), "expected no successes: {successes}");
+        assert_eq!(errors.lines().count(), colors.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_rgb_edge_cases() -> Result<()> {
+        let colors: Vec<String> = vec![
+            "rgb(0, 0, 0)",
+            "rgb(255, 255, 255)",
+            "rgb(0.4, 0.5, 0.6)",
+            "rgb  (1 0 255)  ",
+            "rgb(255,0,0)",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let results = convert_colors(&colors, &Color::Rgb);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(errors.is_empty(), "unexpected errors: {errors}");
+        assert_eq!(successes.lines().count(), colors.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_rgb_invalid_arity() -> Result<()> {
+        let colors: Vec<String> = vec!["rgb()", "rgb(255)", "rgb(255, 0)", "rgb(255, 0, 0, 0)"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let results = convert_colors(&colors, &Color::Rgb);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(successes.is_empty(), "expected no successes: {successes}");
+        assert_eq!(errors.lines().count(), colors.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_rgba_alpha_boundaries() -> Result<()> {
+        let colors: Vec<String> = vec![
+            "rgba(255, 255, 255, 0)",
+            "rgba(255, 255, 255, 1)",
+            "rgba(255, 255, 255, 1.0)",
+            "rgba(255, 255, 255, 50%)",
+            "rgba(255, 255, 255, -0.1)", // invalid: out of range
+            "rgba(255, 255, 255, 1.1)",  // invalid: out of range
+            "rgba(255, 255, 255, 200%)", // invalid: out of range
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let results = convert_colors(&colors, &Color::Rgba);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert_eq!(successes.lines().count(), 4);
+        assert_eq!(errors.lines().count(), 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_oklab_edge_cases() -> Result<()> {
+        let colors: Vec<String> = vec![
+            "oklab(0 0 0)",
+            "oklab(1 0 0)",
+            "oklab(0.5 -0.2 -0.1)",
+            "oklab(-0.1 0.2 0.1)",
+            "oklab(50% 0.2 0.1% / 0%)",
+            "oklab(0.5 0.2 0.1 / 100%)",
+            "OKLAB(0.5 0.2 0.1)",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let results = convert_colors(&colors, &Color::Oklab);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(errors.is_empty(), "unexpected errors: {errors}");
+        assert_eq!(successes.lines().count(), colors.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_oklab_invalid_arity() -> Result<()> {
+        let colors: Vec<String> = vec![
+            "oklab()",
+            "oklab(0.5)",
+            "oklab(0.5 0.2)",
+            "oklab(0.5 0.2 0.1 0.5 0.5)",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let results = convert_colors(&colors, &Color::Oklab);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(successes.is_empty(), "expected no successes: {successes}");
+        assert_eq!(errors.lines().count(), colors.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_oklch_edge_cases() -> Result<()> {
+        let colors: Vec<String> = vec![
+            "oklch(0.5 0.2 0)",
+            "oklch(0.5 0.2 360)",
+            "oklch(0.5 0 120)",
+            "oklch(0.5 0.2 30deg)",
+            "oklch(0.5 0.2 300 / 0.5)",
+            "oklch(0.5, 0.2, 300, 1)",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let results = convert_colors(&colors, &Color::Oklch);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(errors.is_empty(), "unexpected errors: {errors}");
+        assert_eq!(successes.lines().count(), colors.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_oklch_invalid_arity() -> Result<()> {
+        let colors: Vec<String> = vec![
+            "oklch()",
+            "oklch(0.5)",
+            "oklch(0.5 0.2)",
+            "oklch(0.5 0.2 300 0.5 0.5)",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let results = convert_colors(&colors, &Color::Oklch);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(successes.is_empty(), "expected no successes: {successes}");
+        assert_eq!(errors.lines().count(), colors.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_oklch_negative_hue() -> Result<()> {
+        let colors: Vec<String> = vec!["oklch(0.5 0.2 -30deg)", "oklch(0.5 0.2 -300)"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let results = convert_colors(&colors, &Color::Oklch);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert!(errors.is_empty(), "unexpected errors: {errors}");
+        assert_eq!(successes.lines().count(), colors.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_cross_type_batch() -> Result<()> {
+        let colors: Vec<String> = vec![
+            "#ff0000",
+            "rgb(0, 255, 0)",
+            "rgba(0, 0, 255, 0.5)",
+            "oklab(0.5 0.1 0.1)",
+            "oklch(0.5 0.2 300)",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        for target in [
+            Color::Hex,
+            Color::Rgb,
+            Color::Rgba,
+            Color::Oklab,
+            Color::Oklch,
+        ] {
+            let results = convert_colors(&colors, &target);
+
+            let mut w_buf = Vec::new();
+            let mut l_buf = Vec::new();
+            log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+            let successes = String::from_utf8(w_buf)?;
+            let errors = String::from_utf8(l_buf)?;
+
+            assert!(
+                errors.is_empty(),
+                "target {target:?}: unexpected errors: {errors}"
+            );
+            assert_eq!(
+                successes.lines().count(),
+                colors.len(),
+                "target {target:?}: expected all {} inputs to succeed",
+                colors.len()
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversion_logs_mixed_valid_and_invalid_all_types() -> Result<()> {
+        let colors: Vec<String> = vec![
+            "#fff".to_string(),
+            "#12345".to_string(),
+            "rgb(1, 2, 3)".to_string(),
+            "rgb(1, 2)".to_string(),
+            "rgba(1, 2, 3, 0.5)".to_string(),
+            "rgba(1, 2, 3, 1.5)".to_string(),
+            "oklab(0.5 0.1 0.1)".to_string(),
+            "oklab(0.5 0.1)".to_string(),
+            "oklch(0.5 0.2 300)".to_string(),
+            "oklch(0.5 0.2)".to_string(),
+            "not-a-color".to_string(),
+        ];
+        let results = convert_colors(&colors, &Color::Oklab);
+
+        let mut w_buf = Vec::new();
+        let mut l_buf = Vec::new();
+        log_conversion_results(&results, &mut w_buf, &mut l_buf);
+
+        let successes = String::from_utf8(w_buf)?;
+        let errors = String::from_utf8(l_buf)?;
+
+        assert_eq!(successes.lines().count(), 5);
+        assert_eq!(errors.lines().count(), 6);
+
+        let success_lines: Vec<&str> = successes.lines().collect();
+        assert!(success_lines[0].starts_with("#fff ->"));
+        assert!(success_lines[1].starts_with("rgb(1, 2, 3) ->"));
+        assert!(success_lines[2].starts_with("rgba(1, 2, 3, 0.5) ->"));
+        assert!(success_lines[3].starts_with("oklab(0.5 0.1 0.1) ->"));
+        assert!(success_lines[4].starts_with("oklch(0.5 0.2 300) ->"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_oklab_oklch_regex_no_cross_match() -> Result<()> {
+        // Ensures the -? additions to OKLAB_REGEX/OKLCH_REGEX didn't cause
+        // one prefix to be misidentified as the other.
+        assert_eq!(Color::Oklch, identify_color("oklch(0.5 0.2 -30deg)")?);
+        assert_eq!(Color::Oklch, identify_color("oklch(0.5 0.2 -300)")?);
+        assert_eq!(Color::Oklab, identify_color("oklab(0.5 -0.2 -0.1)")?);
+        assert_eq!(Color::Oklab, identify_color("oklab(-0.1 0.2 0.1)")?);
 
         Ok(())
     }

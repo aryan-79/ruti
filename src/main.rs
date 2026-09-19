@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::io;
 use std::path::PathBuf;
-
 mod color;
 
 #[derive(Parser)]
@@ -31,6 +31,10 @@ enum ColorCmds {
         /// Output color space (hex, rgb, rgba, oklab, oklch)
         #[arg(short, long, value_enum)]
         output: color::Color,
+
+        /// Only output converted color values
+        #[arg(long, default_value_t = false)]
+        output_only: bool,
     },
 
     /// Replace colors from a file with converted color values
@@ -50,8 +54,25 @@ fn main() -> Result<()> {
 
     match args.command {
         Commands::Color { cmd } => match cmd {
-            ColorCmds::Convert { colors, output } => {
-                println!("colors: {:?} output: {:?}", colors, output)
+            ColorCmds::Convert {
+                colors,
+                output,
+                output_only,
+            } => {
+                let conversions = color::convert_colors(&colors, &output);
+
+                let stdout = io::stdout();
+                let stderr = io::stderr();
+
+                let mut w_writer = io::BufWriter::new(stdout.lock());
+                let mut l_writer = io::BufWriter::new(stderr.lock());
+
+                color::log_conversion_results(
+                    &conversions,
+                    output_only,
+                    &mut w_writer,
+                    &mut l_writer,
+                );
             }
             ColorCmds::Replace { pattern, file } => {
                 println!("pattern: {:?} file: {}", pattern, file.display())
