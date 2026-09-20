@@ -1786,7 +1786,8 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_hex_edge_cases() -> Result<()> {
-        let colors: Vec<String> = ["#fff",
+        let colors: Vec<String> = [
+            "#fff",
             "#000",
             "#ffff",
             "#0000",
@@ -1795,7 +1796,8 @@ mod tests {
             "#ffffffff",
             "#00000000",
             "#ABC",
-            "#FfFfFf"]
+            "#FfFfFf",
+        ]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1837,11 +1839,13 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_rgb_edge_cases() -> Result<()> {
-        let colors: Vec<String> = ["rgb(0, 0, 0)",
+        let colors: Vec<String> = [
+            "rgb(0, 0, 0)",
             "rgb(255, 255, 255)",
             "rgb(0.4, 0.5, 0.6)",
             "rgb  (1 0 255)  ",
-            "rgb(255,0,0)"]
+            "rgb(255,0,0)",
+        ]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1912,13 +1916,15 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_oklab_edge_cases() -> Result<()> {
-        let colors: Vec<String> = ["oklab(0 0 0)",
+        let colors: Vec<String> = [
+            "oklab(0 0 0)",
             "oklab(1 0 0)",
             "oklab(0.5 -0.2 -0.1)",
             "oklab(-0.1 0.2 0.1)",
             "oklab(50% 0.2 0.1% / 0%)",
             "oklab(0.5 0.2 0.1 / 100%)",
-            "OKLAB(0.5 0.2 0.1)"]
+            "OKLAB(0.5 0.2 0.1)",
+        ]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1939,10 +1945,12 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_oklab_invalid_arity() -> Result<()> {
-        let colors: Vec<String> = ["oklab()",
+        let colors: Vec<String> = [
+            "oklab()",
             "oklab(0.5)",
             "oklab(0.5 0.2)",
-            "oklab(0.5 0.2 0.1 0.5 0.5)"]
+            "oklab(0.5 0.2 0.1 0.5 0.5)",
+        ]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1963,12 +1971,14 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_oklch_edge_cases() -> Result<()> {
-        let colors: Vec<String> = ["oklch(0.5 0.2 0)",
+        let colors: Vec<String> = [
+            "oklch(0.5 0.2 0)",
             "oklch(0.5 0.2 360)",
             "oklch(0.5 0 120)",
             "oklch(0.5 0.2 30deg)",
             "oklch(0.5 0.2 300 / 0.5)",
-            "oklch(0.5, 0.2, 300, 1)"]
+            "oklch(0.5, 0.2, 300, 1)",
+        ]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1989,10 +1999,12 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_oklch_invalid_arity() -> Result<()> {
-        let colors: Vec<String> = ["oklch()",
+        let colors: Vec<String> = [
+            "oklch()",
             "oklch(0.5)",
             "oklch(0.5 0.2)",
-            "oklch(0.5 0.2 300 0.5 0.5)"]
+            "oklch(0.5 0.2 300 0.5 0.5)",
+        ]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -2034,11 +2046,13 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_cross_type_batch() -> Result<()> {
-        let colors: Vec<String> = ["#ff0000",
+        let colors: Vec<String> = [
+            "#ff0000",
             "rgb(0, 255, 0)",
             "rgba(0, 0, 255, 0.5)",
             "oklab(0.5 0.1 0.1)",
-            "oklch(0.5 0.2 300)"]
+            "oklch(0.5 0.2 300)",
+        ]
         .iter()
         .map(|s| s.to_string())
         .collect();
