@@ -280,7 +280,7 @@ impl FromXyz for Oklab {
 }
 
 impl Oklch {
-    fn to_oklab(&self) -> Oklab {
+    fn to_oklab(self) -> Oklab {
         Oklab {
             l: self.l,
             a: self.c * self.h.to_radians().cos(),
@@ -297,7 +297,7 @@ impl ToXyz for Oklch {
 }
 
 impl Oklab {
-    fn to_oklch(&self) -> Oklch {
+    fn to_oklch(self) -> Oklch {
         let c = (self.a * self.a + self.b * self.b).sqrt();
         let mut h = self.b.atan2(self.a).to_degrees();
         if h < 0.0 {
@@ -474,13 +474,8 @@ fn replace_colors(pattern: &str, original: &str, output: Color) -> Result<String
 
     let results = convert_colors(&matches, &output);
 
-    for r in results {
-        match r {
-            Ok((original, converted)) => {
-                content = content.replace(&original, &converted);
-            }
-            Err(_) => {}
-        }
+    for (original, converted) in results.into_iter().flatten() {
+        content = content.replace(&original, &converted);
     }
 
     Ok(content)
@@ -1602,7 +1597,7 @@ mod tests {
 
     #[test]
     fn test_batch_conversion_all_valid() -> Result<()> {
-        let colors: Vec<String> = vec!["#ff0000", "rgb(0, 255, 0)", "rgba(0, 0, 255, 0.5)"]
+        let colors: Vec<String> = ["#ff0000", "rgb(0, 255, 0)", "rgba(0, 0, 255, 0.5)"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1652,7 +1647,7 @@ mod tests {
 
     #[test]
     fn test_conversion_logs() -> Result<()> {
-        let colors: Vec<String> = vec!["#fff", "rgba(255,255,255, 1)"]
+        let colors: Vec<String> = ["#fff", "rgba(255,255,255, 1)"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1675,7 +1670,7 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_with_invalid_color() -> Result<()> {
-        let colors: Vec<String> = vec!["#fff", "not-a-color", "rgba(255,255,255, 1)"]
+        let colors: Vec<String> = ["#fff", "not-a-color", "rgba(255,255,255, 1)"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1699,7 +1694,7 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_all_invalid() -> Result<()> {
-        let colors: Vec<String> = vec!["garbage", "#zzz", "rgba(1,2,3,4,5)"]
+        let colors: Vec<String> = ["garbage", "#zzz", "rgba(1,2,3,4,5)"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1743,7 +1738,7 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_hex_to_hex_roundtrip() -> Result<()> {
-        let colors: Vec<String> = vec!["#ff0000", "#00ff00", "#0000ff"]
+        let colors: Vec<String> = ["#ff0000", "#00ff00", "#0000ff"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1768,7 +1763,7 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_preserves_order() -> Result<()> {
-        let colors: Vec<String> = vec!["#fff", "bad-input", "#000"]
+        let colors: Vec<String> = ["#fff", "bad-input", "#000"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1791,8 +1786,7 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_hex_edge_cases() -> Result<()> {
-        let colors: Vec<String> = vec![
-            "#fff",
+        let colors: Vec<String> = ["#fff",
             "#000",
             "#ffff",
             "#0000",
@@ -1801,8 +1795,7 @@ mod tests {
             "#ffffffff",
             "#00000000",
             "#ABC",
-            "#FfFfFf",
-        ]
+            "#FfFfFf"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1823,7 +1816,7 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_hex_invalid_lengths() -> Result<()> {
-        let colors: Vec<String> = vec!["#f", "#ff", "#12345", "#1234567", "#123456789", "#gggggg"]
+        let colors: Vec<String> = ["#f", "#ff", "#12345", "#1234567", "#123456789", "#gggggg"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1844,13 +1837,11 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_rgb_edge_cases() -> Result<()> {
-        let colors: Vec<String> = vec![
-            "rgb(0, 0, 0)",
+        let colors: Vec<String> = ["rgb(0, 0, 0)",
             "rgb(255, 255, 255)",
             "rgb(0.4, 0.5, 0.6)",
             "rgb  (1 0 255)  ",
-            "rgb(255,0,0)",
-        ]
+            "rgb(255,0,0)"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1871,7 +1862,7 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_rgb_invalid_arity() -> Result<()> {
-        let colors: Vec<String> = vec!["rgb()", "rgb(255)", "rgb(255, 0)", "rgb(255, 0, 0, 0)"]
+        let colors: Vec<String> = ["rgb()", "rgb(255)", "rgb(255, 0)", "rgb(255, 0, 0, 0)"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1892,7 +1883,7 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_rgba_alpha_boundaries() -> Result<()> {
-        let colors: Vec<String> = vec![
+        let colors: Vec<String> = [
             "rgba(255, 255, 255, 0)",
             "rgba(255, 255, 255, 1)",
             "rgba(255, 255, 255, 1.0)",
@@ -1921,15 +1912,13 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_oklab_edge_cases() -> Result<()> {
-        let colors: Vec<String> = vec![
-            "oklab(0 0 0)",
+        let colors: Vec<String> = ["oklab(0 0 0)",
             "oklab(1 0 0)",
             "oklab(0.5 -0.2 -0.1)",
             "oklab(-0.1 0.2 0.1)",
             "oklab(50% 0.2 0.1% / 0%)",
             "oklab(0.5 0.2 0.1 / 100%)",
-            "OKLAB(0.5 0.2 0.1)",
-        ]
+            "OKLAB(0.5 0.2 0.1)"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1950,12 +1939,10 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_oklab_invalid_arity() -> Result<()> {
-        let colors: Vec<String> = vec![
-            "oklab()",
+        let colors: Vec<String> = ["oklab()",
             "oklab(0.5)",
             "oklab(0.5 0.2)",
-            "oklab(0.5 0.2 0.1 0.5 0.5)",
-        ]
+            "oklab(0.5 0.2 0.1 0.5 0.5)"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1976,14 +1963,12 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_oklch_edge_cases() -> Result<()> {
-        let colors: Vec<String> = vec![
-            "oklch(0.5 0.2 0)",
+        let colors: Vec<String> = ["oklch(0.5 0.2 0)",
             "oklch(0.5 0.2 360)",
             "oklch(0.5 0 120)",
             "oklch(0.5 0.2 30deg)",
             "oklch(0.5 0.2 300 / 0.5)",
-            "oklch(0.5, 0.2, 300, 1)",
-        ]
+            "oklch(0.5, 0.2, 300, 1)"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -2004,12 +1989,10 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_oklch_invalid_arity() -> Result<()> {
-        let colors: Vec<String> = vec![
-            "oklch()",
+        let colors: Vec<String> = ["oklch()",
             "oklch(0.5)",
             "oklch(0.5 0.2)",
-            "oklch(0.5 0.2 300 0.5 0.5)",
-        ]
+            "oklch(0.5 0.2 300 0.5 0.5)"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -2030,7 +2013,7 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_oklch_negative_hue() -> Result<()> {
-        let colors: Vec<String> = vec!["oklch(0.5 0.2 -30deg)", "oklch(0.5 0.2 -300)"]
+        let colors: Vec<String> = ["oklch(0.5 0.2 -30deg)", "oklch(0.5 0.2 -300)"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -2051,13 +2034,11 @@ mod tests {
 
     #[test]
     fn test_conversion_logs_cross_type_batch() -> Result<()> {
-        let colors: Vec<String> = vec![
-            "#ff0000",
+        let colors: Vec<String> = ["#ff0000",
             "rgb(0, 255, 0)",
             "rgba(0, 0, 255, 0.5)",
             "oklab(0.5 0.1 0.1)",
-            "oklch(0.5 0.2 300)",
-        ]
+            "oklch(0.5 0.2 300)"]
         .iter()
         .map(|s| s.to_string())
         .collect();
