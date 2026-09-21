@@ -1,8 +1,9 @@
 [package]
 name = "ruti"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 description = "A collection of utilities"
+repository = "https://github.com/aryan-79/ruti"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -11,3 +12,8 @@ regex = "1.13.1"
 
 [dev-dependencies]
 assert_fs = "1.1.4"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
