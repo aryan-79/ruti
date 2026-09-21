@@ -1,6 +1,6 @@
 [package]
 name = "ruti"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A collection of utilities"
 repository = "https://github.com/aryan-79/ruti"
@@ -8,6 +8,7 @@ repository = "https://github.com/aryan-79/ruti"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
+clap_complete_command = "0.6.1"
 regex = "1.13.1"
 
 [dev-dependencies]

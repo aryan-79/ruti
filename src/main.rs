@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete_command::Shell;
 use std::io;
 use std::path::PathBuf;
 mod color;
@@ -17,6 +18,13 @@ enum Commands {
     Color {
         #[command(subcommand)]
         cmd: ColorCmds,
+    },
+
+    /// Generate shell completions
+    Completions {
+        /// The shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
 }
 
@@ -91,6 +99,9 @@ fn main() -> Result<()> {
                 color::replace_in_file(file, &pattern, output, dry_run)?;
             }
         },
+        Commands::Completions { shell } => {
+            shell.generate(&mut Cli::command(), &mut std::io::stdout());
+        }
     }
 
     Ok(())
