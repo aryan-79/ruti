@@ -195,6 +195,15 @@ fn parse_alpha(s: &str) -> Result<f64> {
     Ok(alpha)
 }
 
+fn round_to(value: f64, precision: u32) -> f64 {
+    let factor = 10f64.powi(precision as i32);
+
+    let rounded = (value * factor).round() / factor;
+
+    // prevent -0.0
+    if rounded == 0.0 { 0.0 } else { rounded }
+}
+
 fn srgb_to_linear(v: f64) -> f64 {
     if v <= 0.04045 {
         v / 12.92
@@ -299,10 +308,18 @@ impl ToXyz for Oklch {
 impl Oklab {
     fn to_oklch(self) -> Oklch {
         let c = (self.a * self.a + self.b * self.b).sqrt();
-        let mut h = self.b.atan2(self.a).to_degrees();
-        if h < 0.0 {
-            h += 360.0;
-        }
+
+        const CHROMA_EPSILON: f64 = 1e-4;
+        let (c, h) = if c < CHROMA_EPSILON {
+            (0.0, 0.0)
+        } else {
+            let mut h = self.b.atan2(self.a).to_degrees();
+            if h < 0.0 {
+                h += 360.0;
+            }
+            (c, h)
+        };
+
         Oklch {
             l: self.l,
             c,
@@ -323,35 +340,45 @@ impl Display for Rgba {
         write!(
             f,
             "rgba({}, {}, {}, {})",
-            self.r, self.g, self.b, self.alpha
+            self.r,
+            self.g,
+            self.b,
+            round_to(self.alpha, 4) // no need to clamp parse_alpha ensures alpha range to 0-1
         )
     }
 }
 
 impl Display for Oklab {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.alpha == 1.0 {
-            write!(f, "oklab({} {} {})", self.l, self.a, self.b)
+        let l = round_to(self.l.clamp(0f64, 1f64), 4);
+        let a = round_to(self.a, 4);
+        let b = round_to(self.b, 4);
+        let alpha = round_to(self.alpha, 4);
+
+        if alpha == 1.0 {
+            write!(f, "oklab({} {} {})", l, a, b)
         } else {
-            write!(
-                f,
-                "oklab({} {} {} / {})",
-                self.l, self.a, self.b, self.alpha
-            )
+            write!(f, "oklab({} {} {} / {})", l, a, b, alpha)
         }
     }
 }
 
 impl Display for Oklch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.alpha == 1.0 {
-            write!(f, "oklch({} {} {})", self.l, self.c, self.h)
+        let l = round_to(self.l.clamp(0f64, 1f64), 4);
+        let c = round_to(self.c, 4);
+        let h = if c < 1e-4 {
+            0.0
         } else {
-            write!(
-                f,
-                "oklch({} {} {} / {})",
-                self.l, self.c, self.h, self.alpha
-            )
+            round_to(self.h.rem_euclid(360.0), 2)
+        };
+
+        let alpha = round_to(self.alpha, 4);
+
+        if alpha == 1.0 {
+            write!(f, "oklch({} {} {})", l, c, h)
+        } else {
+            write!(f, "oklch({} {} {} / {})", l, c, h, alpha)
         }
     }
 }
@@ -373,27 +400,46 @@ fn rgba_to_rgb_string(rgba: &Rgba) -> String {
     format!("rgb({}, {}, {})", rgba.r, rgba.g, rgba.b)
 }
 
+/// returns parsed color and re-formatted original color string
+fn normalise<P, T, S>(parser: P, stringify: S) -> Result<(T, String)>
+where
+    P: FnOnce() -> Result<T>,
+    T: ToXyz,
+    S: Fn(&T) -> String,
+{
+    let parsed = parser()?;
+    let stringified = stringify(&parsed);
+
+    Ok((parsed, stringified))
+}
+
 fn convert(color: &str, target: &Color) -> Result<String> {
     let source = identify_color(color)?;
 
-    let (xyz, alpha) = match source {
+    let (xyz, alpha, stringified) = match source {
         Color::Hex | Color::Rgb | Color::Rgba => {
-            let rgba = if source == Color::Hex {
-                parse_hex(color)?
-            } else {
-                parse_rgba(color)?
+            let (rgba, stringified) = match source {
+                Color::Hex => normalise(|| parse_hex(color), rgba_to_hex_string)?,
+                Color::Rgb => normalise(|| parse_rgba(color), rgba_to_rgb_string)?,
+                _ => normalise(|| parse_rgba(color), |r| r.to_string())?,
             };
 
-            (rgba.to_xyz(), rgba.alpha)
+            (rgba.to_xyz(), rgba.alpha, stringified)
         }
         Color::Oklab => {
-            let oklab = parse_oklab(color)?;
-            (oklab.to_xyz(), oklab.alpha)
+            let (oklab, stringified) = normalise(|| parse_oklab(color), |c| c.to_string())?;
+
+            (oklab.to_xyz(), oklab.alpha, stringified)
         }
         Color::Oklch => {
-            let oklch = parse_oklch(color)?;
-            (oklch.to_xyz(), oklch.alpha)
+            let (oklch, stringified) = normalise(|| parse_oklch(color), |c| c.to_string())?;
+
+            (oklch.to_xyz(), oklch.alpha, stringified)
         }
+    };
+
+    if &source == target {
+        return Ok(stringified);
     };
 
     match target {
@@ -1394,7 +1440,7 @@ mod tests {
                     b: 30,
                     alpha: 1.0 / 3.0,
                 },
-                output: "rgba(10, 20, 30, 0.3333333333333333)",
+                output: "rgba(10, 20, 30, 0.3333)",
             },
         ];
 
@@ -1431,7 +1477,7 @@ mod tests {
                     h: 360.0,
                     alpha: 1.0,
                 },
-                output: "oklch(1 0.4 360)",
+                output: "oklch(1 0.4 0)",
             },
             TestCase {
                 input: Oklch {
@@ -1524,12 +1570,8 @@ mod tests {
             // target Rgba: hex input's implicit alpha (1.0) is now shown explicitly.
             ("#ff0000", Color::Rgba, "rgba(255, 0, 0, 1)"),
             ("#00ff0080", Color::Rgb, "rgb(0, 255, 0)"),
-            // 0x80 / 255 = 0.5019607843137255
-            (
-                "#00ff0080",
-                Color::Rgba,
-                "rgba(0, 255, 0, 0.5019607843137255)",
-            ),
+            // 0x80 / 255 = 0.5019607843137255, displayed rounded to 4 dp -> 0.502
+            ("#00ff0080", Color::Rgba, "rgba(0, 255, 0, 0.502)"),
             ("rgb(255, 0, 0)", Color::Rgb, "rgb(255, 0, 0)"),
             ("rgb(10, 20, 30)", Color::Rgb, "rgb(10, 20, 30)"),
             // target Rgba: rgb input's implicit alpha (1.0) is now shown explicitly.
@@ -1541,44 +1583,21 @@ mod tests {
                 Color::Rgba,
                 "rgba(10, 20, 30, 0.5)",
             ),
-            (
-                "#ff0000",
-                Color::Oklab,
-                "oklab(0.627988706625623 0.22487488313589232 0.1258529885009403)",
-            ),
-            (
-                "#ff0000",
-                Color::Oklch,
-                "oklch(0.627988706625623 0.2576968912889696 29.23389948383784)",
-            ),
-            (
-                "rgb(255, 0, 0)",
-                Color::Oklab,
-                "oklab(0.627988706625623 0.22487488313589232 0.1258529885009403)",
-            ),
-            (
-                "oklab(0.5 0.1 0.1)",
-                Color::Oklab,
-                "oklab(0.5000010922212974 0.10002486431431906 0.1000439314724102)",
-            ),
+            ("#ff0000", Color::Oklab, "oklab(0.628 0.2249 0.1259)"),
+            ("#ff0000", Color::Oklch, "oklch(0.628 0.2577 29.23)"),
+            ("rgb(255, 0, 0)", Color::Oklab, "oklab(0.628 0.2249 0.1259)"),
+            ("oklab(0.5 0.1 0.1)", Color::Oklab, "oklab(0.5 0.1 0.1)"),
             (
                 "oklab(0.5 0.1 0.1)",
                 Color::Oklch,
-                "oklch(0.5000010922212974 0.14147000284708502 45.00546046012987)",
+                "oklch(0.5 0.1415 45.01)",
             ),
             // target Hex: must now produce a hex string, not rgba(...).
             // r=161=0xa1, g=66=0x42, b=3=0x03, alpha=1.0 -> 6-digit hex.
             ("oklab(0.5 0.1 0.1)", Color::Hex, "#a14203"),
-            (
-                "oklch(0.5 0.2 300)",
-                Color::Oklch,
-                "oklch(0.5000007475991664 0.19992041207423886 300.0117102735574)",
-            ),
-            (
-                "oklch(0.5 0.2 300)",
-                Color::Oklab,
-                "oklab(0.5000007475991664 0.09999559000652258 -0.17311572182554913)",
-            ),
+            // same-format conversion now normalises instead of roundtripping through XYZ
+            ("oklch(0.5 0.2 300)", Color::Oklch, "oklch(0.5 0.2 300)"),
+            ("oklch(0.5 0.2 300)", Color::Oklab, "oklab(0.5 0.1 -0.1731)"),
             // target Hex: r=119=0x77, g=58=0x3a, b=193=0xc1, alpha=1.0 -> 6-digit hex.
             ("oklch(0.5 0.2 300)", Color::Hex, "#773ac1"),
         ];
@@ -1593,6 +1612,226 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_round_to_helper() {
+        assert_eq!(round_to(0.12345, 4), 0.1235);
+        assert_eq!(round_to(0.12344, 4), 0.1234);
+        assert_eq!(round_to(0.5, 0), 1.0);
+        assert_eq!(round_to(-0.12345, 4), -0.1235);
+
+        // rounding carries across all digits
+        assert_eq!(round_to(0.09999, 4), 0.1);
+        assert_eq!(round_to(0.99999, 4), 1.0);
+
+        // avoids -0.0: a tiny negative value rounds to exactly +0.0
+        let r = round_to(-0.00004, 4);
+        assert_eq!(r, 0.0);
+        assert!(!r.is_sign_negative());
+        assert_eq!(format!("{r}"), "0");
+    }
+
+    #[test]
+    fn test_oklch_hue_wrapping_display() {
+        // overflow past 360 wraps via rem_euclid (not `%`, which keeps the dividend's sign)
+        assert_eq!(
+            format!(
+                "{}",
+                Oklch {
+                    l: 1.0,
+                    c: 0.4,
+                    h: 450.0,
+                    alpha: 1.0
+                }
+            ),
+            "oklch(1 0.4 90)"
+        );
+        // exact 360 wraps to 0
+        assert_eq!(
+            format!(
+                "{}",
+                Oklch {
+                    l: 1.0,
+                    c: 0.4,
+                    h: 360.0,
+                    alpha: 1.0
+                }
+            ),
+            "oklch(1 0.4 0)"
+        );
+        // negative hue: the direct regression for the `%` vs rem_euclid bug (`-30 % 360 == -30`)
+        assert_eq!(
+            format!(
+                "{}",
+                Oklch {
+                    l: 1.0,
+                    c: 0.4,
+                    h: -30.0,
+                    alpha: 1.0
+                }
+            ),
+            "oklch(1 0.4 330)"
+        );
+        // large negative hue
+        assert_eq!(
+            format!(
+                "{}",
+                Oklch {
+                    l: 1.0,
+                    c: 0.4,
+                    h: -390.0,
+                    alpha: 1.0
+                }
+            ),
+            "oklch(1 0.4 330)"
+        );
+        // multiple full turns
+        assert_eq!(
+            format!(
+                "{}",
+                Oklch {
+                    l: 1.0,
+                    c: 0.4,
+                    h: 720.0,
+                    alpha: 1.0
+                }
+            ),
+            "oklch(1 0.4 0)"
+        );
+    }
+
+    #[test]
+    fn test_achromatic_zeroing_consistency() {
+        // tiny nonzero a/b below the 1e-4 chroma epsilon must zero BOTH c and h.
+        // Regression: an intermediate fix zeroed only h, yielding "oklch(0.5 0.0001 0)".
+        let oklch = Oklab {
+            l: 0.5,
+            a: 0.00005,
+            b: 0.00003,
+            alpha: 1.0,
+        }
+        .to_oklch();
+
+        assert_eq!(oklch.c, 0.0);
+        assert_eq!(oklch.h, 0.0);
+        assert_eq!(oklch.l, 0.5);
+        assert_eq!(format!("{oklch}"), "oklch(0.5 0 0)");
+    }
+
+    #[test]
+    fn test_achromatic_end_to_end() -> Result<()> {
+        assert_eq!(convert("#fff", &Color::Oklch)?, "oklch(1 0 0)");
+        assert_eq!(convert("#000", &Color::Oklch)?, "oklch(0 0 0)");
+        // same-format input is normalised (no XYZ roundtrip); the Display impl
+        // forces hue to 0 when chroma is below epsilon, so an explicit 275 hue
+        // is dropped for the achromatic color.
+        assert_eq!(
+            convert("oklch(0.5, 0, 275)", &Color::Oklch)?,
+            "oklch(0.5 0 0)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_same_format_conversion_normalises() -> Result<()> {
+        // When input and target formats match, convert() re-formats (normalises)
+        // the parsed color directly instead of roundtripping through XYZ — so
+        // floating-point roundtrip noise is eliminated entirely.
+
+        // oklch roundtrip used to yield "oklch(0.5 0.1999 300.01)"
+        assert_eq!(
+            convert("oklch(0.5 0.2 300)", &Color::Oklch)?,
+            "oklch(0.5 0.2 300)"
+        );
+        assert_eq!(
+            convert("oklab(0.5 0.1 0.1)", &Color::Oklab)?,
+            "oklab(0.5 0.1 0.1)"
+        );
+        // explicit negative hue is wrapped to a canonical [0, 360) hue
+        assert_eq!(
+            convert("oklch(0.5 0.2 -30deg)", &Color::Oklch)?,
+            "oklch(0.5 0.2 330)"
+        );
+        // short hex is expanded to 6 digits
+        assert_eq!(convert("#f00", &Color::Hex)?, "#ff0000");
+        // whitespace/punctuation is normalised for rgb
+        assert_eq!(convert("  rgb (1 0 255)  ", &Color::Rgb)?, "rgb(1, 0, 255)");
+        // percentage alpha normalised to decimal, separators to ", "
+        assert_eq!(
+            convert("rgba(255,255,255, 50%)", &Color::Rgba)?,
+            "rgba(255, 255, 255, 0.5)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_rgba_alpha_rounding() {
+        // 1/3 as f64 is 0.3333333333333333..., rounded to 4 dp for display
+        let rgba = Rgba {
+            r: 10,
+            g: 20,
+            b: 30,
+            alpha: 1.0 / 3.0,
+        };
+
+        assert_eq!(format!("{rgba}"), "rgba(10, 20, 30, 0.3333)");
+    }
+
+    #[test]
+    fn test_convert_format_follows_target_not_source() -> Result<()> {
+        // Bug 1: the output format must follow the `target` argument, not the source format.
+        let hex_from_rgba = convert("rgba(255, 0, 0, 0.5)", &Color::Hex)?;
+        assert!(hex_from_rgba.starts_with('#'));
+
+        let rgb_from_hex = convert("#ff0000", &Color::Rgb)?;
+        assert!(rgb_from_hex.starts_with("rgb("));
+        assert!(!rgb_from_hex.contains("rgba("));
+
+        let rgba_from_hex = convert("#ff0000", &Color::Rgba)?;
+        assert!(rgba_from_hex.starts_with("rgba("));
+
+        let hex_from_oklab = convert("oklab(0.5 0.1 0.1)", &Color::Hex)?;
+        assert!(hex_from_oklab.starts_with('#'));
+        assert!(!hex_from_oklab.starts_with('r'));
+
+        // rgba input to Rgb drops the alpha value entirely
+        let rgb_from_rgba = convert("rgba(10, 20, 30, 0.5)", &Color::Rgb)?;
+        assert_eq!(rgb_from_rgba, "rgb(10, 20, 30)");
+        assert!(!rgb_from_rgba.contains("0.5"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_regex_negative_and_percentage_allowances() -> Result<()> {
+        // Bug 2: previously-rejected (valid) inputs now identify as their own type.
+        assert_eq!(Color::Oklab, identify_color("oklab(0.5 -0.2 -0.1)")?);
+        assert_eq!(Color::Oklab, identify_color("oklab(-0.1 0.2 0.1)")?);
+        assert_eq!(Color::Rgba, identify_color("rgba(255, 255, 255, 50%)")?);
+        assert_eq!(Color::Oklch, identify_color("oklch(0.5 0.2 -30deg)")?);
+        assert_eq!(Color::Oklch, identify_color("oklch(0.5 0.2 -300)")?);
+
+        // and they convert successfully end-to-end
+        assert!(convert("oklab(0.5 -0.2 -0.1)", &Color::Oklab).is_ok());
+        assert!(convert("oklab(-0.1 0.2 0.1)", &Color::Oklab).is_ok());
+        assert!(convert("rgba(255, 255, 255, 50%)", &Color::Rgba).is_ok());
+        assert!(convert("oklch(0.5 0.2 -30deg)", &Color::Oklch).is_ok());
+        assert!(convert("oklch(0.5 0.2 -300)", &Color::Oklch).is_ok());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_negative_alpha_rejected() {
+        assert!(parse_alpha("-0.1").is_err());
+        assert!(identify_color("rgba(255,255,255,-0.1)").is_err());
+        assert!(convert("rgba(255,255,255,-0.1)", &Color::Rgba).is_err());
+        // alpha groups deliberately got no `-?` prefix, so a negative alpha on
+        // oklab is rejected at the regex stage too (never syntactically reachable).
+        assert!(identify_color("oklab(0.5 0.2 0.1 -0.5)").is_err());
     }
 
     #[test]
@@ -2194,15 +2433,7 @@ mod tests {
   filter: oklch(0.5 0.2 300);
 }
 ";
-        check_replace(
-            "hex",
-            content,
-            Color::Oklch,
-            &[(
-                "#fff",
-                "oklch(1.00000102817238 0.00003887250067408087 72.60561225992106)",
-            )],
-        )
+        check_replace("hex", content, Color::Oklch, &[("#fff", "oklch(1 0 0)")])
     }
 
     #[test]
@@ -2255,10 +2486,7 @@ mod tests {
             "oklch",
             content,
             Color::Oklab,
-            &[(
-                "oklch(0.5 0.2 300)",
-                "oklab(0.5000007475991664 0.09999559000652258 -0.17311572182554913)",
-            )],
+            &[("oklch(0.5 0.2 300)", "oklab(0.5 0.1 -0.1731)")],
         )
     }
 
@@ -2330,9 +2558,7 @@ border-color: #00ff00;
 
         replace_in_file(input_file.path().to_owned(), "hex", Color::Oklch, false)?;
 
-        input_file.assert(
-            "body {\n  color: oklch(1.00000102817238 0.00003887250067408087 72.60561225992106);\n}\n",
-        );
+        input_file.assert("body {\n  color: oklch(1 0 0);\n}\n");
 
         Ok(())
     }
@@ -2377,9 +2603,7 @@ border-color: #00ff00;
 
         replace_in_file(input_file.path().to_owned(), "oklch", Color::Oklab, false)?;
 
-        input_file.assert(
-            "filter: oklab(0.5000007475991664 0.09999559000652258 -0.17311572182554913);\n",
-        );
+        input_file.assert("filter: oklab(0.5 0.1 -0.1731);\n");
 
         Ok(())
     }
