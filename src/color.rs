@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use clap::ValueEnum;
+use owo_colors::{OwoColorize, Rgb as OwoRgb};
 use regex::Regex;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -465,6 +466,12 @@ pub fn convert_colors(colors: &[String], target: &Color) -> Vec<Result<(String, 
         .collect()
 }
 
+fn to_owo_rgb(c: &str) -> Result<OwoRgb> {
+    let rgb_string = convert(c, &Color::Rgb)?;
+    let Rgba { r, g, b, alpha: _a } = parse_rgba(&rgb_string)?;
+    return Ok(OwoRgb(r, g, b));
+}
+
 pub fn log_conversion_results(
     results: &[Result<(String, String)>],
     output_only: bool,
@@ -477,7 +484,17 @@ pub fn log_conversion_results(
                 if output_only {
                     let _ = writeln!(w_writer, "{converted}");
                 } else {
-                    let _ = writeln!(w_writer, "{original} -> {converted}");
+                    let owo_rgb = to_owo_rgb(original).ok();
+
+                    if let Some(owo_rgb) = owo_rgb {
+                        let _ = writeln!(
+                            w_writer,
+                            "{original} -> {converted} {colorised} ",
+                            colorised = "      ".on_color(owo_rgb)
+                        );
+                    } else {
+                        let _ = writeln!(w_writer, "{original} -> {converted}");
+                    }
                 }
             }
             Err(e) => {
