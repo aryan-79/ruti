@@ -469,7 +469,7 @@ pub fn convert_colors(colors: &[String], target: &Color) -> Vec<Result<(String, 
 fn to_owo_rgb(c: &str) -> Result<OwoRgb> {
     let rgb_string = convert(c, &Color::Rgb)?;
     let Rgba { r, g, b, alpha: _a } = parse_rgba(&rgb_string)?;
-    return Ok(OwoRgb(r, g, b));
+    Ok(OwoRgb(r, g, b))
 }
 
 pub fn log_conversion_results(
