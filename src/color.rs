@@ -5,6 +5,7 @@ use regex::Regex;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::{fmt::Display, sync::LazyLock};
 
 static HEX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -37,11 +38,18 @@ pub enum Color {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Rgba {
-    r: u8,
-    g: u8,
-    b: u8,
-    alpha: f64,
+pub struct Rgba {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub alpha: f64,
+}
+
+impl FromStr for Rgba {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> std::prelude::v1::Result<Self, Self::Err> {
+        parse_rgba(s)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -414,7 +422,7 @@ where
     Ok((parsed, stringified))
 }
 
-fn convert(color: &str, target: &Color) -> Result<String> {
+pub fn convert(color: &str, target: &Color) -> Result<String> {
     let source = identify_color(color)?;
 
     let (xyz, alpha, stringified) = match source {

@@ -1,9 +1,11 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete_command::Shell;
+use ruti::image::pipeline::Job;
+use ruti::{color, image};
 use std::io;
 use std::path::PathBuf;
-mod color;
+use std::str::FromStr;
 
 #[derive(Parser)]
 #[command(about,long_about = None)]
@@ -18,6 +20,45 @@ enum Commands {
     Color {
         #[command(subcommand)]
         cmd: ColorCmds,
+    },
+
+    /// Image related utilities
+    Image {
+        /// Paths to input images
+        #[arg(required = true)]
+        images: Vec<String>,
+
+        /// Output image quality.
+        #[arg(short, long)]
+        quality: Option<u8>,
+
+        /// Background color to use when converting images with transparency to a format
+        /// that does not support alpha. Supports hex, RGB, RGBA, Oklab, and Oklch
+        /// color formats.
+        #[arg(short, long)]
+        background: Option<String>,
+
+        /// Target dimensions in WIDTHxHEIGHT format (e.g., 1920x1080).
+        #[arg(short, long)]
+        size: Option<String>,
+
+        /// Resize strategy to use when resizing images. Requires `--size`.
+        #[arg(
+            value_enum,
+            long,
+            short = 'r',
+            default_value = "resize",
+            requires = "size"
+        )]
+        resize: image::resize::ResizeType,
+
+        /// Directory in which to save the output images.
+        #[arg(short, long)]
+        out_dir: Option<String>,
+
+        /// Output image format
+        #[arg(short, long, value_enum, required = true)]
+        format: image::codecs::OutputFormat,
     },
 
     /// Generate shell completions
@@ -99,6 +140,59 @@ fn main() -> Result<()> {
                 color::replace_in_file(file, &pattern, output, dry_run)?;
             }
         },
+
+        Commands::Image {
+            images,
+            quality,
+            background,
+            size,
+            resize,
+            out_dir,
+            format,
+        } => {
+            let jobs: Vec<Job> = images
+                .iter()
+                .map(|i| {
+                    if format == image::codecs::OutputFormat::Jpeg {
+                        let color = color::convert(
+                            &background.clone().unwrap_or(String::from("#fff")),
+                            &color::Color::Rgba,
+                        )
+                        .unwrap_or(String::from("rgba(255,255,255)"));
+
+                        let rgba = color::Rgba::from_str(&color).unwrap_or(color::Rgba {
+                            r: 255u8,
+                            g: 255u8,
+                            b: 255u8,
+                            alpha: 1.0,
+                        });
+
+                        return Job::new(
+                            resize.clone(),
+                            size.clone(),
+                            format.clone(),
+                            PathBuf::from(i),
+                            quality.unwrap_or(75u8),
+                            Some([rgba.r, rgba.g, rgba.b]),
+                        );
+                    }
+
+                    Job::new(
+                        resize.clone(),
+                        size.clone(),
+                        format.clone(),
+                        PathBuf::from(i),
+                        quality.unwrap_or(75u8),
+                        None,
+                    )
+                })
+                .collect();
+
+            let outdir = PathBuf::from(out_dir.unwrap_or(String::from(".")));
+
+            image::pipeline::process(jobs, &outdir);
+        }
+
         Commands::Completions { shell } => {
             shell.generate(&mut Cli::command(), &mut std::io::stdout());
         }

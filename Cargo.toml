@@ -9,8 +9,11 @@ repository = "https://github.com/aryan-79/ruti"
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 clap_complete_command = "0.6.1"
+image = { version = "0.25.10", features = ["avif", "jpeg", "png", "webp"] }
 owo-colors = "4.4.0"
+rayon = "1.12.0"
 regex = "1.13.1"
+webp = "0.3.1"
 
 [dev-dependencies]
 assert_fs = "1.1.4"
